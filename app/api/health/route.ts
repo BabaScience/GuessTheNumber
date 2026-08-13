@@ -16,5 +16,17 @@ export function GET() {
     ok: true,
     storage: usingRedis ? "redis" : "memory",
     durable: usingRedis,
+    // Which region and instance answered. Refresh a few times: if the region
+    // ever changes, the regions pin in vercel.json isn't taking effect, and
+    // players will end up on machines that can't see each other's rooms.
+    region: process.env.VERCEL_REGION ?? "local",
+    instance: INSTANCE_ID,
   });
 }
+
+/**
+ * Random per-process id. Watching this change across refreshes tells you how
+ * often instances are being recycled, which is exactly how often an in-memory
+ * room would be lost and rebuilt.
+ */
+const INSTANCE_ID = crypto.randomUUID().slice(0, 8);

@@ -173,6 +173,35 @@ button {
   text-align: center;
 }
 
+.notice-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 1080px;
+  margin: 0 auto 16px;
+  padding: 11px 14px;
+  border: 1px solid var(--foe);
+  border-radius: 4px;
+  background: #14201f;
+  color: var(--chalk);
+  font-size: 13px;
+  line-height: 1.45;
+  animation: rise 0.35s var(--ease);
+}
+.notice-x {
+  flex: none;
+  margin-left: auto;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  color: var(--mute);
+  cursor: pointer;
+  font-size: 13px;
+}
+.notice-x:hover {
+  color: var(--chalk);
+}
+
 /* ---------------------------------------------------------------- stage -- */
 
 .stage {

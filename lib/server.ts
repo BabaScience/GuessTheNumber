@@ -11,7 +11,7 @@ import {
   winnerOf,
   type RoomView,
 } from "./game";
-import type { PublicPlayer, PublicRoom } from "./protocol";
+import type { ErrorCode, PublicPlayer, PublicRoom } from "./protocol";
 import { getRoom, markSeen, onlinePlayers, type StoredPlayer, type StoredRoom } from "./store";
 
 /* -------------------------------------------------------------------------- */
@@ -40,8 +40,8 @@ export function newToken(): string {
 /* responses                                                                  */
 /* -------------------------------------------------------------------------- */
 
-export function fail(status: number, message: string) {
-  return NextResponse.json({ error: message }, { status });
+export function fail(status: number, message: string, code?: ErrorCode) {
+  return NextResponse.json({ error: message, ...(code ? { code } : {}) }, { status });
 }
 
 export const ok = <T>(body: T, status = 200) => NextResponse.json(body, { status });
@@ -92,6 +92,7 @@ export function toPublicRoom(
     round: room.round,
     startSeat: room.startSeat,
     rev: room.rev,
+    restartedAt: room.restartedAt ?? null,
     phase,
     turnPlayerId: turnPlayerId(view),
     winnerId: winnerOf(view)?.id ?? null,
@@ -144,14 +145,34 @@ export async function authenticate(
   req: Request,
 ): Promise<Authed | { error: NextResponse }> {
   const room = await getRoom(code);
-  if (!room) return { error: fail(404, `No room called ${code}. Check the code with whoever made it.`) };
-
   const playerId = req.headers.get("x-player-id") ?? "";
   const token = req.headers.get("x-player-token") ?? "";
-  const player = room.players[playerId];
 
-  if (!player || !timingSafeEqual(player.token, token)) {
-    return { error: fail(401, "You're not seated in this room.") };
+  // These two cases are the ones a client can recover from by reclaiming its
+  // seat, so they carry a code rather than a flat 401. Without memory of the
+  // room we cannot tell a legitimate player from anyone else — which is
+  // precisely why a reclaim restarts the round instead of restoring it.
+  if (!room) {
+    return {
+      error: fail(404, `No room called ${code}.`, "room-gone"),
+    };
+  }
+
+  // A caller with no credentials at all was never seated here — that's a plain
+  // rejection, not something a reclaim could put right.
+  if (!playerId || !token) {
+    return { error: fail(401, "You're not seated in this room.", "bad-token") };
+  }
+
+  const player = room.players[playerId];
+  if (!player) {
+    return {
+      error: fail(409, "Your seat in this room is gone.", "seat-lost"),
+    };
+  }
+
+  if (!timingSafeEqual(player.token, token)) {
+    return { error: fail(401, "You're not seated in this room.", "bad-token") };
   }
   return { room, player };
 }

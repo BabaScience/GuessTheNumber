@@ -2,24 +2,34 @@
 
 import type {
   Credentials,
+  ErrorCode,
   GuessResponse,
   JoinResponse,
   PublicRoom,
+  ReclaimRequest,
   RoomResponse,
   UnchangedResponse,
 } from "./protocol";
 
 const CREDENTIALS_KEY = "hld:credentials";
+const SEAT_KEY = "hld:seat";
 const NAME_KEY = "hld:name";
 
 /** Thrown for any non-2xx reply, carrying the server's human-readable message. */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly code?: ErrorCode;
+  constructor(status: number, message: string, code?: ErrorCode) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
+}
+
+/** Errors a reclaim can recover from. */
+export function isRecoverable(err: unknown): boolean {
+  return err instanceof ApiError && (err.code === "room-gone" || err.code === "seat-lost");
 }
 
 /** `auth`, not `credentials` — RequestInit already owns that name. */
@@ -51,13 +61,20 @@ async function request<T>(
   }
 
   if (!res.ok) {
+    const shaped = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
     const message =
-      body && typeof body === "object" && "error" in body && typeof body.error === "string"
-        ? body.error
-        : `Something went wrong (${res.status}).`;
-    throw new ApiError(res.status, message);
+      typeof shaped.error === "string" ? shaped.error : `Something went wrong (${res.status}).`;
+    const code = typeof shaped.code === "string" ? (shaped.code as ErrorCode) : undefined;
+    throw new ApiError(res.status, message, code);
   }
   return body as T;
+}
+
+export function reclaimSeat(code: string, claim: ReclaimRequest) {
+  return request<RoomResponse>(`/api/rooms/${encodeURIComponent(code)}/reclaim`, {
+    method: "POST",
+    body: JSON.stringify(claim),
+  });
 }
 
 /* -------------------------------------------------------------------------- */
@@ -176,6 +193,40 @@ export function loadCredentials(): Credentials | null {
 export function clearCredentials() {
   try {
     window.localStorage.removeItem(CREDENTIALS_KEY);
+    window.localStorage.removeItem(SEAT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * The half of the room this client could rebuild if the server forgot it.
+ * Kept beside the credentials so even a page refresh after an instance recycle
+ * can put the seat back.
+ */
+export function saveSeat(code: string, seat: ReclaimRequest) {
+  try {
+    window.localStorage.setItem(SEAT_KEY, JSON.stringify({ code, seat }));
+  } catch {
+    // ignore
+  }
+}
+
+export function loadSeat(code: string): ReclaimRequest | null {
+  try {
+    const raw = window.localStorage.getItem(SEAT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { code?: string; seat?: ReclaimRequest };
+    if (parsed.code !== code || !parsed.seat) return null;
+    return parsed.seat;
+  } catch {
+    return null;
+  }
+}
+
+export function clearSeat() {
+  try {
+    window.localStorage.removeItem(SEAT_KEY);
   } catch {
     // ignore
   }

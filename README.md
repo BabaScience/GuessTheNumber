@@ -33,25 +33,51 @@ separate `localStorage`, since that is where a player's seat is remembered.
 
 ## Deploying to Vercel
 
-1. Push this repository to GitHub, then **Add New… → Project** on Vercel and
-   import it. The framework preset, build command, and output are all detected;
-   nothing needs configuring.
-2. **Add Redis before you invite anyone.** In the project, go to
-   **Storage → Create Database → Upstash Redis** and connect it. That injects
-   `KV_REST_API_URL` and `KV_REST_API_TOKEN`, which the app picks up on its own.
-3. Redeploy, then open `/api/health`. It should say `"storage": "redis"`.
+Push to GitHub, then **Add New… → Project** on Vercel and import it. There is
+nothing to configure and **no database to pay for** — rooms live in the server's
+memory. Open `/api/health` afterwards to confirm what you got.
 
-### Why step 2 matters
+### Pick your region
 
-Without those variables the app keeps rooms in the server process's memory.
-That is genuinely fine locally, where there is one process. On Vercel every
-request can hit a different serverless instance, so the player who created a
-room and the player joining it may be talking to two different memories — the
-join fails with "no room called ABCD", intermittently and confusingly. The
-in-memory backend is a development convenience, not a deployment mode.
+[vercel.json](vercel.json) pins functions to a single region, currently `fra1`
+(Frankfurt). **Change it to whichever region is nearest you and the people you
+play with** — `iad1` for the US east coast, `sfo1` for the west, `sin1` for
+Singapore, and so on.
 
-Any Upstash-compatible Redis works; the app talks to it over the REST API, so
-there is no TCP connection to keep alive between invocations.
+The pin is not about latency. Left unpinned, Vercel serves each player from the
+region closest to *them*, so two players in different countries would be talking
+to two different machines with two different memories, and the second player
+could never find the first one's room. One region means one pool of instances to
+share.
+
+### What happens when an instance recycles
+
+Serverless instances don't live forever. When one carrying a room goes away, the
+next request from either player comes back `room-gone`, and their client quietly
+re-registers the seat: name, difficulty, round number and score all come back,
+because the browser was already holding them.
+
+What does **not** come back is the round in progress. Both players re-pick their
+numbers, and a banner explains why. That is deliberate. Restoring the round
+would mean keeping each player's secret in their own browser and replaying it —
+and a player could then replay an older copy to change the number they had
+already committed to. A round that restarts in the open beats one that can be
+quietly rewritten.
+
+In practice this is rare. Both clients poll every second or two while a game is
+live, which keeps an instance warm for as long as anyone is playing.
+
+If you want to watch how often it actually happens, refresh `/api/health` and
+watch the `instance` field — it changes when a new process answers you.
+
+### Optional: durable rooms
+
+The room store is an interface with two implementations
+([lib/store.ts](lib/store.ts)). If you ever have a Redis you're happy to pay for
+(or a free tier from Upstash directly, rather than through Vercel's Storage
+tab), set `KV_REST_API_URL` and `KV_REST_API_TOKEN` and rooms stop being tied to
+an instance's lifetime — no code change, and `/api/health` will report
+`"storage": "redis"`. Nothing in the game requires it.
 
 ## How it fits together
 

@@ -31,6 +31,8 @@ export type StoredRoom = {
   rev: number;
   createdAt: number;
   updatedAt: number;
+  /** When a reclaim last rebuilt this room, so clients can explain the reset. */
+  restartedAt?: number | null;
 };
 
 /** Rooms disappear this long after the last action. */
