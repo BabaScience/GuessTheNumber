@@ -1,29 +1,37 @@
 import type { Metadata, Viewport } from "next";
-import { Inter_Tight, Martian_Mono } from "next/font/google";
+import { Fraunces, Plus_Jakarta_Sans } from "next/font/google";
+
+import { THEME_BOOTSTRAP } from "@/lib/theme";
 
 import "./globals.css";
 
-// Self-hosted by next/font at build time — no render-blocking request to
-// Google, and no layout shift when the face swaps in.
-const body = Inter_Tight({
+/**
+ * Fraunces carries the wordmark and the big moments — a soft optical serif,
+ * warm without being cute. Plus Jakarta Sans runs the interface; its numerals
+ * are even-width, which matters when every screen is full of them.
+ *
+ * Both are self-hosted by next/font at build time, so there is no render-blocking
+ * request and no flash of a fallback face.
+ */
+const display = Fraunces({
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-body",
+  variable: "--font-display",
   display: "swap",
+  axes: ["SOFT", "WONK"],
 });
 
-const mono = Martian_Mono({
+const ui = Plus_Jakarta_Sans({
   subsets: ["latin"],
-  weight: ["300", "400", "600", "700"],
-  variable: "--font-mono",
+  variable: "--font-ui",
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "Higher / Lower — a two-player number duel",
+  title: "Higher / Lower",
   description:
-    "Two players, two secret numbers. Take turns guessing, watch each other close in, and the first to land it exactly takes the round.",
+    "A two-player number duel. Pick a number, share the code, and take turns closing in — first to land it exactly wins the round.",
   applicationName: "Higher / Lower",
+  appleWebApp: { capable: true, title: "Higher / Lower", statusBarStyle: "default" },
   openGraph: {
     title: "Higher / Lower",
     description: "A two-player number duel. Make a room, share the code, start hunting.",
@@ -32,17 +40,23 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0F1319",
   width: "device-width",
   initialScale: 1,
-  // The keypad sits near the bottom edge on phones; let the page paint under
-  // the home indicator rather than leaving a dead strip.
+  // The keypad sits against the bottom edge; let the page paint under the home
+  // indicator instead of leaving a dead strip above it.
   viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#fffcfd" },
+    { media: "(prefers-color-scheme: dark)", color: "#1a1218" },
+  ],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${body.variable} ${mono.variable}`}>
+    <html lang="en" className={`${display.variable} ${ui.variable}`} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
+      </head>
       <body>{children}</body>
     </html>
   );

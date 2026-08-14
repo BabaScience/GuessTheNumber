@@ -2,11 +2,12 @@
 
 import { useState } from "react";
 
+import { buzz } from "@/lib/haptics";
 import type { PublicRoom } from "@/lib/protocol";
 
 type Props = { room: PublicRoom; onLeave: () => void };
 
-/** Clipboard API needs a secure context; fall back so http:// LAN testing works. */
+/** Clipboard needs a secure context; fall back so http:// LAN testing works. */
 async function copyText(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard && window.isSecureContext) {
@@ -39,6 +40,7 @@ export function LobbyScreen({ room, onLeave }: Props) {
     typeof window === "undefined" ? "" : `${window.location.origin}/?room=${room.code}`;
 
   const flash = (what: "code" | "link") => {
+    buzz("nudge");
     setCopied(what);
     setTimeout(() => setCopied(null), 1800);
   };
@@ -53,7 +55,7 @@ export function LobbyScreen({ room, onLeave }: Props) {
         });
         return;
       } catch {
-        // The user dismissed the sheet, or sharing isn't allowed here.
+        // Sheet dismissed, or sharing isn't allowed here.
       }
     }
     if (await copyText(shareUrl)) flash("link");
@@ -61,31 +63,23 @@ export function LobbyScreen({ room, onLeave }: Props) {
 
   return (
     <main className="stage stage--center">
-      <h2 className="eyebrow">Send this code to your opponent</h2>
+      <p className="eyebrow">Room open</p>
+      <h2 className="title">Send this to your opponent</h2>
 
       <button
         type="button"
-        className="bigcode"
+        className="codebox"
         onClick={async () => {
           if (await copyText(room.code)) flash("code");
         }}
         aria-label={`Room code ${room.code.split("").join(" ")}. Tap to copy.`}
       >
         {room.code.split("").map((char, i) => (
-          <span key={i} className="bigcode-char">
+          <span key={i} className="codebox-char">
             {char}
           </span>
         ))}
       </button>
-
-      <div className="choice">
-        <button type="button" className="btn btn--solid" onClick={share}>
-          Share invite link
-        </button>
-        <button type="button" className="btn" onClick={onLeave}>
-          Close the room
-        </button>
-      </div>
 
       <p className="note" aria-live="polite">
         {copied === "code"
@@ -95,10 +89,19 @@ export function LobbyScreen({ room, onLeave }: Props) {
             : "Tap the code to copy it."}
       </p>
 
+      <div className="choice">
+        <button type="button" className="btn btn--primary btn--block" onClick={share}>
+          Share invite link
+        </button>
+        <button type="button" className="btn btn--block" onClick={onLeave}>
+          Close the room
+        </button>
+      </div>
+
       <div className="waiting">
         <span className="dot" />
         <span>
-          Holding the room open — {room.levelName}, 1 to {room.max}
+          Waiting for someone to join — {room.levelName}, 1 to {room.max}
         </span>
       </div>
     </main>

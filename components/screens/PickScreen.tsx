@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 
-import type { PublicPlayer, PublicRoom } from "@/lib/protocol";
 import { validateSecret } from "@/lib/game";
+import { buzz } from "@/lib/haptics";
+import type { PublicPlayer, PublicRoom } from "@/lib/protocol";
 import type { Duel } from "@/lib/use-duel";
 
 type Props = {
@@ -23,27 +24,29 @@ export function PickScreen({ duel, room, me, foe }: Props) {
     const value = Number.parseInt(draft, 10);
     const check = validateSecret(Number.isNaN(value) ? NaN : value, room.max);
     if (!check.ok) {
+      buzz("refuse");
       setProblem(check.reason);
       return;
     }
     setProblem("");
+    buzz("nudge");
     duel.lockSecret(value);
   };
 
   if (me.hasSecret) {
     return (
       <main className="stage stage--center">
-        <h2 className="eyebrow">Locked in</h2>
+        <p className="eyebrow">Locked in</p>
         <div className="locked">
           <span className="locked-label">Your number</span>
           <span className="locked-val">{me.secret}</span>
         </div>
-        <p className="note">
+        <p className="lede">
           {foe?.name ?? "Your opponent"} will be hunting this. Only you can see it.
         </p>
         <div className="waiting">
-          <span className="dot" />
-          <span>Waiting on {foe?.name ?? "your opponent"} to choose</span>
+          <span className="dot dot--foe" />
+          <span>Waiting for {foe?.name ?? "your opponent"} to pick…</span>
         </div>
       </main>
     );
@@ -51,10 +54,11 @@ export function PickScreen({ duel, room, me, foe }: Props) {
 
   return (
     <main className="stage stage--center">
-      <h2 className="eyebrow">Choose the number they&apos;ll be hunting</h2>
+      <p className="eyebrow">Your secret</p>
+      <h2 className="title">Pick a number they&apos;ll hunt</h2>
 
-      <div className="secret-in">
-        <span className="secret-caret">#</span>
+      <div className="secret-input">
+        <span className="secret-hash">#</span>
         <input
           className="input input--secret"
           inputMode="numeric"
@@ -78,7 +82,7 @@ export function PickScreen({ duel, room, me, foe }: Props) {
 
       <button
         type="button"
-        className="btn btn--solid"
+        className="btn btn--primary btn--block"
         onClick={submit}
         disabled={duel.busy || !draft}
       >

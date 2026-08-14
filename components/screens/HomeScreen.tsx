@@ -12,13 +12,14 @@ type Props = {
 export function HomeScreen({ duel, name, onNameChange }: Props) {
   return (
     <main className="stage stage--center">
-      <p className="pitch">
-        Two players, two secret numbers. Take turns guessing, watch each other close
-        in, and the first to land it exactly takes the round.
+      <h1 className="title">Two numbers, two players, one winner.</h1>
+      <p className="lede">
+        You each hide a number. Take turns guessing — every miss tells you higher
+        or lower. First to land it exactly takes the round.
       </p>
 
       <label className="field">
-        <span className="field-label">What should we call you</span>
+        <span className="field-label">What should we call you?</span>
         <input
           className="input"
           value={name}
@@ -32,10 +33,18 @@ export function HomeScreen({ duel, name, onNameChange }: Props) {
       {duel.error && <p className="note note--warn">{duel.error}</p>}
 
       <div className="choice">
-        <button type="button" className="btn btn--solid" onClick={() => duel.setStage("create")}>
+        <button
+          type="button"
+          className="btn btn--primary btn--block"
+          onClick={() => duel.setStage("create")}
+        >
           Start a room
         </button>
-        <button type="button" className="btn" onClick={() => duel.setStage("join")}>
+        <button
+          type="button"
+          className="btn btn--block"
+          onClick={() => duel.setStage("join")}
+        >
           Join with a code
         </button>
       </div>
@@ -45,10 +54,10 @@ export function HomeScreen({ duel, name, onNameChange }: Props) {
           <span className="howto-n">1</span>One of you opens a room and shares the code.
         </li>
         <li>
-          <span className="howto-n">2</span>You each secretly pick a number for the other to hunt.
+          <span className="howto-n">2</span>You each pick a number in secret.
         </li>
         <li>
-          <span className="howto-n">3</span>Guess in turns. Every miss tells you higher or lower.
+          <span className="howto-n">3</span>Guess in turns and close in.
         </li>
       </ol>
     </main>

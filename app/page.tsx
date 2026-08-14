@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { CreateScreen } from "@/components/screens/CreateScreen";
 import { DuelScreen } from "@/components/screens/DuelScreen";
 import { HomeScreen } from "@/components/screens/HomeScreen";
@@ -19,15 +20,12 @@ export default function Page() {
   const [code, setCode] = useState("");
   const [muted, setMutedState] = useState(false);
 
-  /*
-   * Restore the display name and the mute preference.
-   *
-   * These live in localStorage, which does not exist while the page is being
-   * prerendered, so they cannot be lazy useState initialisers without causing a
-   * hydration mismatch. This runs once on mount and never again — the cascading
-   * re-render the lint rule guards against is a single extra pass here.
-   */
   useEffect(() => {
+    /*
+     * The display name and mute preference live in localStorage, which does not
+     * exist while the page is prerendered — so these cannot be lazy useState
+     * initialisers without a hydration mismatch. Runs once on mount.
+     */
     /* eslint-disable react-hooks/set-state-in-effect */
     setName(loadName());
     setMutedState(initSound());
@@ -39,18 +37,15 @@ export default function Page() {
   }, [name]);
 
   /**
-   * An invite link lands as /?room=CODE. Pre-fill the join screen and tidy the
-   * URL, so a refresh mid-game doesn't try to re-join a room you're already in.
+   * An invite link arrives as /?room=CODE. Pre-fill the join screen and tidy
+   * the URL, so a refresh mid-game doesn't try to re-join a room you're in.
    */
   useEffect(() => {
     if (duel.restoring) return;
-    const params = new URLSearchParams(window.location.search);
-    const invited = params.get("room");
+    const invited = new URLSearchParams(window.location.search).get("room");
     if (!invited) return;
     window.history.replaceState({}, "", window.location.pathname);
     if (duel.stage === "home") {
-      // Reading window.location is inherently a post-mount job, and this fires
-      // at most once per page load.
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setCode(normalizeCode(invited));
       duel.setStage("join");
@@ -62,6 +57,7 @@ export default function Page() {
   const room = duel.room;
   const me = room && duel.myId ? room.players[duel.myId] ?? null : null;
   const foe = room && duel.myId ? opponentOf(room, duel.myId) : null;
+  const inRoom = duel.stage === "room" && room;
 
   const toggleMute = () => {
     const next = !muted;
@@ -70,55 +66,61 @@ export default function Page() {
   };
 
   return (
-    <div className="hld">
-      <header className="top">
+    <div className="app">
+      <header className="topbar">
         <button
           type="button"
-          className="wordmark"
+          className="mark"
           onClick={() => duel.stage !== "room" && duel.goHome()}
           aria-label="Higher / Lower — home"
         >
-          <span className="wm-up">↑</span>
-          <span className="wm-txt">Higher</span>
-          <span className="wm-slash">/</span>
-          <span className="wm-txt">Lower</span>
-          <span className="wm-dn">↓</span>
+          Higher<span className="mark-slash">/</span>Lower
         </button>
 
-        <div className="top-meta">
-          {room && duel.stage === "room" && (
-            <>
-              {me && foe && (
-                <span className="chip chip--score" title="Rounds won">
-                  <span className="score-you">{me.wins}</span>
-                  <span className="score-sep">–</span>
-                  <span className="score-foe">{foe.wins}</span>
-                </span>
-              )}
-              <span className="chip">{room.code}</span>
-              <span className="chip chip--ghost">1–{room.max}</span>
-            </>
+        {inRoom && (
+          <>
+            {me && foe && (
+              <span className="pill" title="Rounds won">
+                <span className="score-you">{me.wins}</span>
+                <span className="score-sep">–</span>
+                <span className="score-foe">{foe.wins}</span>
+              </span>
+            )}
+            <span className="pill pill--code">{room.code}</span>
+          </>
+        )}
+
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={toggleMute}
+          aria-pressed={muted}
+          aria-label={muted ? "Turn sound on" : "Turn sound off"}
+        >
+          {muted ? (
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+              <path d="M9.5 4 5.8 7H3v6h2.8l3.7 3V4Z" strokeLinejoin="round" />
+              <path d="m13 8 4 4M17 8l-4 4" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+              <path d="M9.5 4 5.8 7H3v6h2.8l3.7 3V4Z" strokeLinejoin="round" />
+              <path d="M13 7.5a3.5 3.5 0 0 1 0 5M15.3 5a7 7 0 0 1 0 10" strokeLinecap="round" />
+            </svg>
           )}
-          <button
-            type="button"
-            className="icon-btn"
-            onClick={toggleMute}
-            aria-pressed={muted}
-            aria-label={muted ? "Unmute sound" : "Mute sound"}
-            title={muted ? "Sound off" : "Sound on"}
-          >
-            {muted ? "🔇" : "🔊"}
+        </button>
+
+        <ThemeToggle />
+
+        {inRoom && (
+          <button type="button" className="link" onClick={() => duel.leave()}>
+            Leave
           </button>
-          {duel.stage === "room" && (
-            <button type="button" className="link" onClick={() => duel.leave()}>
-              Leave
-            </button>
-          )}
-        </div>
+        )}
       </header>
 
       {duel.offline && (
-        <div className="offline" role="status">
+        <div className="banner-offline" role="status">
           Lost touch with the server — still trying…
         </div>
       )}

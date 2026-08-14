@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 
+import { buzz } from "@/lib/haptics";
 import { play } from "@/lib/sound";
 
 type Props = {
@@ -15,8 +16,9 @@ type Props = {
 const DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
 
 /**
- * On-screen keypad that also binds the physical keyboard, so the game feels
- * native whether you're on a phone or at a desk.
+ * The main control on a phone, so it sits in the thumb zone with keys well
+ * past the 44px minimum. Also binds the physical keyboard, so the game plays
+ * the same at a desk.
  */
 export function Keypad({ value, onChange, onSubmit, disabled, maxDigits }: Props) {
   const pressDigit = (digit: string) => {
@@ -25,12 +27,14 @@ export function Keypad({ value, onChange, onSubmit, disabled, maxDigits }: Props
     if (!value && digit === "0") return;
     const next = value + digit;
     if (next.length > maxDigits) return;
+    buzz("tap");
     play("tap");
     onChange(next);
   };
 
   const backspace = () => {
     if (disabled || !value) return;
+    buzz("tap");
     play("tap");
     onChange(value.slice(0, -1));
   };
@@ -38,7 +42,7 @@ export function Keypad({ value, onChange, onSubmit, disabled, maxDigits }: Props
   useEffect(() => {
     if (disabled) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      // Don't hijack typing that's meant for a text field.
+      // Don't hijack typing meant for a text field.
       const target = event.target as HTMLElement | null;
       if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -64,7 +68,7 @@ export function Keypad({ value, onChange, onSubmit, disabled, maxDigits }: Props
         <button
           key={digit}
           type="button"
-          className="pad-key"
+          className="key"
           onClick={() => pressDigit(digit)}
           disabled={disabled}
         >
@@ -73,19 +77,19 @@ export function Keypad({ value, onChange, onSubmit, disabled, maxDigits }: Props
       ))}
       <button
         type="button"
-        className="pad-key pad-key--sub"
+        className="key key--util"
         onClick={backspace}
         disabled={disabled || !value}
         aria-label="Delete last digit"
       >
         ⌫
       </button>
-      <button type="button" className="pad-key" onClick={() => pressDigit("0")} disabled={disabled}>
+      <button type="button" className="key" onClick={() => pressDigit("0")} disabled={disabled}>
         0
       </button>
       <button
         type="button"
-        className="pad-key pad-key--go"
+        className="key key--go"
         onClick={onSubmit}
         disabled={disabled || !value}
         aria-label="Submit guess"

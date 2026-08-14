@@ -12,7 +12,8 @@ export function CreateScreen({ duel, name }: Props) {
 
   return (
     <main className="stage stage--center">
-      <h2 className="eyebrow">How wide should the field be</h2>
+      <p className="eyebrow">New room</p>
+      <h2 className="title">How wide should the field be?</h2>
 
       <div className="levels" role="radiogroup" aria-label="Difficulty">
         {LEVELS.map((level) => (
@@ -27,8 +28,12 @@ export function CreateScreen({ duel, name }: Props) {
           >
             <span className="level-range">1–{level.max}</span>
             <span className="level-name">{level.name}</span>
-            <span className="level-note">{level.note}</span>
-            <span className="level-par">≈{level.par} guesses if you play it perfectly</span>
+            <span className="level-check" aria-hidden="true">
+              ✓
+            </span>
+            <span className="level-note">
+              {level.note} About {level.par} guesses played perfectly.
+            </span>
           </button>
         ))}
       </div>
@@ -38,13 +43,13 @@ export function CreateScreen({ duel, name }: Props) {
       <div className="choice">
         <button
           type="button"
-          className="btn btn--solid"
+          className="btn btn--primary btn--block"
           onClick={() => duel.create(name, levelId)}
           disabled={duel.busy}
         >
           {duel.busy ? "Opening…" : "Open the room"}
         </button>
-        <button type="button" className="btn" onClick={() => duel.goHome()}>
+        <button type="button" className="btn btn--block" onClick={() => duel.goHome()}>
           Back
         </button>
       </div>

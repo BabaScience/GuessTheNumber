@@ -19,7 +19,8 @@ export function JoinScreen({ duel, name, onNameChange, code, onCodeChange }: Pro
 
   return (
     <main className="stage stage--center">
-      <h2 className="eyebrow">Enter the room code</h2>
+      <p className="eyebrow">Join a room</p>
+      <h2 className="title">What&apos;s the code?</h2>
 
       <input
         className="input input--code"
@@ -38,10 +39,10 @@ export function JoinScreen({ duel, name, onNameChange, code, onCodeChange }: Pro
         }}
       />
 
-      {/* Arriving by invite link skips the home screen, so this is the only
-          chance the guest gets to say who they are. */}
+      {/* Arriving by invite link skips the home screen, so this is the guest's
+          only chance to say who they are. */}
       <label className="field">
-        <span className="field-label">What should we call you</span>
+        <span className="field-label">What should we call you?</span>
         <input
           className="input"
           value={name}
@@ -60,13 +61,13 @@ export function JoinScreen({ duel, name, onNameChange, code, onCodeChange }: Pro
       <div className="choice">
         <button
           type="button"
-          className="btn btn--solid"
+          className="btn btn--primary btn--block"
           onClick={submit}
           disabled={duel.busy || !ready}
         >
           {duel.busy ? "Looking…" : "Join the room"}
         </button>
-        <button type="button" className="btn" onClick={() => duel.goHome()}>
+        <button type="button" className="btn btn--block" onClick={() => duel.goHome()}>
           Back
         </button>
       </div>
