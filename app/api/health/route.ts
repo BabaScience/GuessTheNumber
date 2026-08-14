@@ -1,32 +1,44 @@
-import { ok } from "@/lib/server";
-import { usingRedis } from "@/lib/store";
+import { NextResponse } from "next/server";
+
+import { backend, isDurable, storeHealth } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/health — which storage backend did this deployment actually pick up?
- *
- * "memory" on Vercel is the one misconfiguration that looks fine until a second
- * player joins and lands on a different instance, so it's worth being able to
- * check without playing a whole round to find out.
- */
-export function GET() {
-  return ok({
-    ok: true,
-    storage: usingRedis ? "redis" : "memory",
-    durable: usingRedis,
-    // Which region and instance answered. Refresh a few times: if the region
-    // ever changes, the regions pin in vercel.json isn't taking effect, and
-    // players will end up on machines that can't see each other's rooms.
-    region: process.env.VERCEL_REGION ?? "local",
-    instance: INSTANCE_ID,
-  });
-}
-
-/**
- * Random per-process id. Watching this change across refreshes tells you how
- * often instances are being recycled, which is exactly how often an in-memory
- * room would be lost and rebuilt.
+ * Random per-process id. Refreshing this endpoint a few times shows how many
+ * instances are answering you — the thing that makes in-memory storage
+ * unworkable here.
  */
 const INSTANCE_ID = crypto.randomUUID().slice(0, 8);
+
+/**
+ * GET /api/health — is this deployment actually able to run a game?
+ *
+ * `durable: false` on Vercel is the one misconfiguration that looks fine until
+ * a second player joins: each instance would keep its own copy of the room and
+ * the two of you would drift apart mid-game.
+ */
+export async function GET() {
+  const store = await storeHealth();
+
+  return NextResponse.json(
+    {
+      ok: store.ok && isDurable,
+      storage: backend,
+      durable: isDurable,
+      store: store.detail,
+      region: process.env.VERCEL_REGION ?? "local",
+      instance: INSTANCE_ID,
+      ...(isDurable
+        ? {}
+        : {
+            warning:
+              "Rooms are kept in this instance's memory. That is fine locally, " +
+              "but on Vercel each instance has its own copy and players will lose " +
+              "each other's games. Set MONGODB_URI.",
+          }),
+    },
+    { status: store.ok && isDurable ? 200 : 503 },
+  );
+}

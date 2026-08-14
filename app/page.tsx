@@ -123,20 +123,6 @@ export default function Page() {
         </div>
       )}
 
-      {duel.notice && (
-        <div className="notice-bar" role="status">
-          <span>{duel.notice}</span>
-          <button
-            type="button"
-            className="notice-x"
-            onClick={duel.dismissNotice}
-            aria-label="Dismiss"
-          >
-            ✕
-          </button>
-        </div>
-      )}
-
       {duel.restoring ? (
         <main className="stage stage--center">
           <div className="waiting">

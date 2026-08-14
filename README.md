@@ -15,69 +15,107 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:3000>. To play against yourself while developing, use a
-second browser (or `127.0.0.1` instead of `localhost`) — the two tabs need
-separate `localStorage`, since that is where a player's seat is remembered.
+Open <http://localhost:3000>. Locally there is only one server process, so no
+database is needed — rooms are kept in memory and you can play immediately. For
+a deployment that is not true; see below.
+
+To play against yourself while developing, use a second browser (or
+`127.0.0.1` instead of `localhost`) — the two tabs need separate
+`localStorage`, since that is where a player's seat is remembered.
+
+To develop against the real database, copy [.env.example](.env.example) to
+`.env.local` and fill it in. `.env.local` is gitignored; never put real
+credentials in `.env.example`, which is committed.
 
 ## Scripts
 
-| Command             | What it does                                        |
-| ------------------- | --------------------------------------------------- |
-| `npm run dev`       | Dev server with hot reload                          |
-| `npm run build`     | Production build                                    |
-| `npm start`         | Serve the production build                          |
-| `npm test`          | Game-rule unit tests (`node:test`, no browser)      |
-| `npm run typecheck` | `tsc --noEmit`                                      |
-| `npm run lint`      | ESLint                                              |
-| `npm run verify`    | typecheck + test + build, in that order             |
+| Command             | What it does                                          |
+| ------------------- | ----------------------------------------------------- |
+| `npm run dev`       | Dev server with hot reload                            |
+| `npm run build`     | Production build                                      |
+| `npm start`         | Serve the production build                            |
+| `npm test`          | Rule and config unit tests (`node:test`, no browser)  |
+| `npm run smoke`     | Plays a whole game over HTTP against a running server |
+| `npm run typecheck` | `tsc --noEmit`                                        |
+| `npm run lint`      | ESLint                                                |
+| `npm run verify`    | typecheck + test + build, in that order               |
 
 ## Deploying to Vercel
 
-Push to GitHub, then **Add New… → Project** on Vercel and import it. There is
-nothing to configure and **no database to pay for** — rooms live in the server's
-memory. Open `/api/health` afterwards to confirm what you got.
+The game needs a database. Not for scale — for correctness. See
+[Why a database is not optional](#why-a-database-is-not-optional) below if
+you're tempted to skip it.
+
+**1. Create a free MongoDB cluster.** At
+[atlas.mongodb.com](https://atlas.mongodb.com), create an **M0** cluster — free
+forever, no card. Put it in the region closest to the one in
+[vercel.json](vercel.json), since every turn is a round trip.
+
+**2. Create a database user.** *Database Access → Add New Database User*. That
+username and password become `MONGODB_USERNAME` and `MONGODB_PASSWORD`.
+
+**3. Allow access from anywhere.** *Network Access → 0.0.0.0/0*. Vercel's
+functions have no fixed IP, so the cluster has to accept any of them. Leaving
+this out produces a timeout, not a permission error, which is confusing.
+
+**4. Copy the connection string.** *Connect → Drivers*. Paste it into
+`MONGODB_URI` and **delete the `<username>:<password>@` part**. Credentials are
+passed to the driver separately, so a password containing `@`, `/` or `:` needs
+no escaping — the usual reason a correct password appears to fail. The app
+refuses to start on a URI that still has `<placeholders>` in it.
+
+**5. Set all three in Vercel** under *Settings → Environment Variables*, then
+**redeploy** — variables are applied at build time, so an existing deployment
+won't pick them up.
+
+**6. Verify.**
+
+```bash
+npm run smoke -- https://your-app.vercel.app
+```
+
+That plays a complete game against the deployment: storage durability, secret
+redaction, turn order, winning, rematch. It fails loudly rather than subtly if
+anything is wrong. `/api/health` on its own gives the short version.
 
 ### Pick your region
 
-[vercel.json](vercel.json) pins functions to a single region, currently `fra1`
-(Frankfurt). **Change it to whichever region is nearest you and the people you
-play with** — `iad1` for the US east coast, `sfo1` for the west, `sin1` for
-Singapore, and so on.
+[vercel.json](vercel.json) pins functions to one region, currently `fra1`
+(Frankfurt). Change it to whichever is nearest you and your database — `iad1`
+for the US east coast, `sfo1` for the west, `sin1` for Singapore.
 
-The pin is not about latency. Left unpinned, Vercel serves each player from the
-region closest to *them*, so two players in different countries would be talking
-to two different machines with two different memories, and the second player
-could never find the first one's room. One region means one pool of instances to
-share.
+This is now only about latency. It is not load-bearing for correctness.
 
-### What happens when an instance recycles
+### Why a database is not optional
 
-Serverless instances don't live forever. When one carrying a room goes away, the
-next request from either player comes back `room-gone`, and their client quietly
-re-registers the seat: name, difficulty, round number and score all come back,
-because the browser was already holding them.
+Running rooms in the server's memory looks like it works. It doesn't, and the
+way it fails is worth understanding, because it cost this project a rewrite.
 
-What does **not** come back is the round in progress. Both players re-pick their
-numbers, and a banner explains why. That is deliberate. Restoring the round
-would mean keeping each player's secret in their own browser and replaying it —
-and a player could then replay an older copy to change the number they had
-already committed to. A round that restarts in the open beats one that can be
-quietly rewritten.
+Vercel runs **several instances per region**, each a separate process with its
+own memory, and it spreads requests across them with no affinity. Two players
+polling once a second generate constant overlapping requests, which is exactly
+what makes the platform start another instance. From then on, some of your
+requests are answered by a process that has never heard of your room.
 
-In practice this is rare. Both clients poll every second or two while a game is
-live, which keeps an instance warm for as long as anyone is playing.
+The symptoms are strange rather than obviously fatal: a join that fails right
+after the room was created, guesses that vanish, a game that resets to the
+number-picking screen partway through. Pinning the region does not help — that
+controls *where*, not *how many*.
 
-If you want to watch how often it actually happens, refresh `/api/health` and
-watch the `instance` field — it changes when a new process answers you.
+A shared store removes the question. Every instance reads and writes the same
+rooms, so which one answers stops mattering. That is why ordinary Next.js apps
+never hit this: they keep nothing in memory.
 
-### Optional: durable rooms
+Set `MONGODB_URI` partially (say, without the password) and the app refuses to
+run rather than falling back to memory, because a silent fallback is a failure
+nobody notices until mid-game.
 
-The room store is an interface with two implementations
-([lib/store.ts](lib/store.ts)). If you ever have a Redis you're happy to pay for
-(or a free tier from Upstash directly, rather than through Vercel's Storage
-tab), set `KV_REST_API_URL` and `KV_REST_API_TOKEN` and rooms stop being tied to
-an instance's lifetime — no code change, and `/api/health` will report
-`"storage": "redis"`. Nothing in the game requires it.
+### Using Redis instead
+
+The store is an interface ([lib/store.ts](lib/store.ts)). Set
+`KV_REST_API_URL` and `KV_REST_API_TOKEN` for any Upstash-compatible Redis and
+it will use that instead, with no code change. MongoDB takes precedence when
+both are set.
 
 ## How it fits together
 
@@ -89,11 +127,15 @@ components/screens/     home · create · join · lobby · pick · duel
 components/             Caliper (the range meter) · GuessLog · Keypad
 lib/
   game.ts               pure rules — phases, turn order, bounds, validation
-  store.ts              room storage: Upstash Redis, or memory as a fallback
+  store.ts              room storage: MongoDB, Redis, or memory for local dev
+  mongo.ts              the connection, cached per process
+  mongo-config.ts       reading and validating the environment
+  store-types.ts        the stored room, kept apart to avoid an import cycle
   server.ts             auth, redaction, id generation
   protocol.ts           the exact shape of what crosses the wire
   use-duel.ts           client state machine and the polling loop
-tests/game.test.ts      rules tests
+scripts/smoke.mjs       plays a whole game against a running deployment
+tests/                  rule and configuration tests
 ```
 
 `lib/game.ts` has no imports and no side effects, so the server decides the game
@@ -124,6 +166,13 @@ tab is hidden — and `GET /api/rooms/:code?since=<rev>` answers with a small
 Polling was chosen over websockets deliberately: this is a turn-based game where
 a second of latency is invisible, and it means no connection state to hold open
 on a platform that bills for exactly that.
+
+Writes use compare-and-set on the room's revision rather than a lock: a mutation
+only lands if nobody has written since it read, and a lost race retries against
+fresh state. Two players are rarely writing at once, but when they are — the
+same person's guess arriving twice, or a rematch clicked by both — nothing is
+silently overwritten, and there is no lock to leak if an instance dies holding
+one.
 
 ## Rules worth knowing
 

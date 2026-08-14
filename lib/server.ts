@@ -92,7 +92,6 @@ export function toPublicRoom(
     round: room.round,
     startSeat: room.startSeat,
     rev: room.rev,
-    restartedAt: room.restartedAt ?? null,
     phase,
     turnPlayerId: turnPlayerId(view),
     winnerId: winnerOf(view)?.id ?? null,
@@ -148,30 +147,14 @@ export async function authenticate(
   const playerId = req.headers.get("x-player-id") ?? "";
   const token = req.headers.get("x-player-token") ?? "";
 
-  // These two cases are the ones a client can recover from by reclaiming its
-  // seat, so they carry a code rather than a flat 401. Without memory of the
-  // room we cannot tell a legitimate player from anyone else — which is
-  // precisely why a reclaim restarts the round instead of restoring it.
+  // With a shared store this is authoritative: the room really has expired or
+  // been closed, rather than us having reached a server that hadn't heard of it.
   if (!room) {
-    return {
-      error: fail(404, `No room called ${code}.`, "room-gone"),
-    };
+    return { error: fail(404, `No room called ${code}.`, "room-gone") };
   }
 
-  // A caller with no credentials at all was never seated here — that's a plain
-  // rejection, not something a reclaim could put right.
-  if (!playerId || !token) {
-    return { error: fail(401, "You're not seated in this room.", "bad-token") };
-  }
-
-  const player = room.players[playerId];
-  if (!player) {
-    return {
-      error: fail(409, "Your seat in this room is gone.", "seat-lost"),
-    };
-  }
-
-  if (!timingSafeEqual(player.token, token)) {
+  const player = playerId ? room.players[playerId] : undefined;
+  if (!playerId || !token || !player || !timingSafeEqual(player.token, token)) {
     return { error: fail(401, "You're not seated in this room.", "bad-token") };
   }
   return { room, player };

@@ -1,82 +1,71 @@
 import "server-only";
 
-import type { Guess } from "./game";
+import { MONGODB_DB, mongo, mongoConfigError, usingMongo } from "./mongo";
+import {
+  PRESENCE_TTL_SECONDS,
+  ROOM_TTL_SECONDS,
+  type Mutation,
+  type StoredPlayer,
+  type StoredRoom,
+} from "./store-types";
 
-/* -------------------------------------------------------------------------- */
-/* Server-side room shape (secrets and tokens live here and never leave)       */
-/* -------------------------------------------------------------------------- */
-
-export type StoredPlayer = {
-  id: string;
-  name: string;
-  /** The number this player chose for their opponent to hunt. Never sent out. */
-  secret: number | null;
-  guesses: Guess[];
-  /** Bearer secret proving "I am this seat". Never sent to the other player. */
-  token: string;
-  /** Rounds this player has won in this room. */
-  wins: number;
-};
-
-export type StoredRoom = {
-  code: string;
-  max: number;
-  levelId: string;
-  levelName: string;
-  order: string[];
-  players: Record<string, StoredPlayer>;
-  round: number;
-  startSeat: number;
-  /** Bumped on every mutation so clients can cheaply detect "nothing new". */
-  rev: number;
-  createdAt: number;
-  updatedAt: number;
-  /** When a reclaim last rebuilt this room, so clients can explain the reset. */
-  restartedAt?: number | null;
-};
-
-/** Rooms disappear this long after the last action. */
-export const ROOM_TTL_SECONDS = 60 * 60 * 6;
+export type { Mutation, StoredPlayer, StoredRoom };
+export { PRESENCE_TTL_SECONDS, ROOM_TTL_SECONDS };
 
 /* -------------------------------------------------------------------------- */
 /* Backend selection                                                          */
 /* -------------------------------------------------------------------------- */
 
-const REDIS_URL =
-  process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL ?? "";
-const REDIS_TOKEN =
-  process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN ?? "";
+const REDIS_URL = process.env.KV_REST_API_URL ?? process.env.UPSTASH_REDIS_REST_URL ?? "";
+const REDIS_TOKEN = process.env.KV_REST_API_TOKEN ?? process.env.UPSTASH_REDIS_REST_TOKEN ?? "";
 
-export const usingRedis = Boolean(REDIS_URL && REDIS_TOKEN);
+export const usingRedis = !usingMongo && Boolean(REDIS_URL && REDIS_TOKEN);
+
+/**
+ * Which store is in play. "memory" is the fallback and is only correct where
+ * there is exactly one server process — a `next dev` session, or `next start`
+ * on your own machine.
+ *
+ * It is NOT correct on Vercel. Serverless scales by running several instances,
+ * each with its own memory, and requests are spread across them with no
+ * affinity, so two players routinely end up talking to different copies of the
+ * same game. See the README.
+ */
+export const backend: "mongo" | "redis" | "memory" = usingMongo
+  ? "mongo"
+  : usingRedis
+    ? "redis"
+    : "memory";
+
+export const isDurable = backend !== "memory";
+
+if (mongoConfigError) {
+  console.error(`[higher-lower] ${mongoConfigError}`);
+} else if (!isDurable && process.env.VERCEL) {
+  console.warn(
+    "[higher-lower] No MongoDB configured. Rooms are being kept in instance memory, " +
+      "which does not work on Vercel: players get routed to different instances and " +
+      "lose each other's games. Set MONGODB_URI, MONGODB_USERNAME and MONGODB_PASSWORD.",
+  );
+}
 
 const key = (code: string) => `hld:room:${code}`;
 const lockKey = (code: string) => `hld:lock:${code}`;
 const seenKey = (code: string, playerId: string) => `hld:seen:${code}:${playerId}`;
 
-/**
- * How long after a player's last request we still consider them present.
- * Clients poll well inside this, so a real disconnect surfaces in a few seconds
- * while an ordinary slow request never flickers them offline.
- */
-export const PRESENCE_TTL_SECONDS = 15;
-
 /* -------------------------------------------------------------------------- */
-/* In-memory backend — used for local dev and whenever Redis isn't configured  */
+/* In-memory backend — local development only                                 */
 /* -------------------------------------------------------------------------- */
 
 type MemoryEntry = { room: StoredRoom; expiresAt: number };
 
-/**
- * Survives Next.js dev-server hot reloads by hanging off globalThis; without
- * this every edit would silently wipe every open room.
- */
 const { memory, memorySeen } = (() => {
   const g = globalThis as typeof globalThis & {
     __hldRooms?: Map<string, MemoryEntry>;
     __hldSeen?: Map<string, number>;
   };
-  if (!g.__hldRooms) g.__hldRooms = new Map();
-  if (!g.__hldSeen) g.__hldSeen = new Map();
+  g.__hldRooms ??= new Map();
+  g.__hldSeen ??= new Map();
   return { memory: g.__hldRooms, memorySeen: g.__hldSeen };
 })();
 
@@ -86,32 +75,38 @@ function memorySweep(now: number) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Upstash REST helpers                                                       */
+/* Upstash REST helper                                                        */
 /* -------------------------------------------------------------------------- */
 
 async function redis(command: (string | number)[]): Promise<unknown> {
   const res = await fetch(REDIS_URL, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${REDIS_TOKEN}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${REDIS_TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify(command),
     cache: "no-store",
   });
-  if (!res.ok) {
-    throw new Error(`Redis command failed (${res.status}): ${await res.text()}`);
-  }
+  if (!res.ok) throw new Error(`Redis command failed (${res.status})`);
   const body = (await res.json()) as { result?: unknown; error?: string };
   if (body.error) throw new Error(`Redis error: ${body.error}`);
   return body.result ?? null;
 }
 
+const expiryDate = () => new Date(Date.now() + ROOM_TTL_SECONDS * 1000);
+
 /* -------------------------------------------------------------------------- */
-/* Public API                                                                 */
+/* Rooms                                                                      */
 /* -------------------------------------------------------------------------- */
 
 export async function getRoom(code: string): Promise<StoredRoom | null> {
+  if (usingMongo) {
+    const { rooms } = await mongo();
+    const doc = await rooms.findOne({ _id: code });
+    // The TTL monitor only sweeps about once a minute, so an expired room can
+    // still be sitting there. Treat it as gone rather than serving it.
+    if (!doc || doc.expiresAt.getTime() <= Date.now()) return null;
+    return doc.room;
+  }
+
   if (usingRedis) {
     const raw = await redis(["GET", key(code)]);
     if (typeof raw !== "string") return null;
@@ -121,26 +116,57 @@ export async function getRoom(code: string): Promise<StoredRoom | null> {
       return null;
     }
   }
+
   const now = Date.now();
   memorySweep(now);
   const entry = memory.get(code);
   if (!entry || entry.expiresAt <= now) return null;
-  // Hand out a copy. Callers mutate what they get back, and a rejected
-  // mutation must not leave its half-finished edits in the live map.
+  // Hand out a copy: callers mutate what they get, and a rejected mutation
+  // must not leave half-finished edits in the live map.
   return structuredClone(entry.room);
 }
 
 export async function putRoom(room: StoredRoom): Promise<void> {
   room.updatedAt = Date.now();
+
+  if (usingMongo) {
+    const { rooms } = await mongo();
+    await rooms.updateOne(
+      { _id: room.code },
+      { $set: { room, expiresAt: expiryDate() } },
+      { upsert: true },
+    );
+    return;
+  }
+
   if (usingRedis) {
     await redis(["SET", key(room.code), JSON.stringify(room), "EX", ROOM_TTL_SECONDS]);
     return;
   }
+
   memory.set(room.code, { room, expiresAt: Date.now() + ROOM_TTL_SECONDS * 1000 });
 }
 
 /** Create only if the code is free. Returns false when the code is taken. */
 export async function createRoom(room: StoredRoom): Promise<boolean> {
+  if (usingMongo) {
+    const { rooms } = await mongo();
+    try {
+      await rooms.insertOne({ _id: room.code, room, expiresAt: expiryDate() });
+      return true;
+    } catch (err) {
+      // Duplicate _id — someone else holds this code. Unless it is simply an
+      // expired room the TTL monitor hasn't collected yet, in which case the
+      // code is genuinely free and we take it over.
+      if (!isDuplicateKey(err)) throw err;
+      const claimed = await rooms.updateOne(
+        { _id: room.code, expiresAt: { $lte: new Date() } },
+        { $set: { room, expiresAt: expiryDate() } },
+      );
+      return claimed.modifiedCount === 1;
+    }
+  }
+
   if (usingRedis) {
     const result = await redis([
       "SET",
@@ -152,6 +178,7 @@ export async function createRoom(room: StoredRoom): Promise<boolean> {
     ]);
     return result !== null;
   }
+
   const now = Date.now();
   memorySweep(now);
   const existing = memory.get(room.code);
@@ -160,7 +187,16 @@ export async function createRoom(room: StoredRoom): Promise<boolean> {
   return true;
 }
 
+function isDuplicateKey(err: unknown): boolean {
+  return Boolean(err && typeof err === "object" && (err as { code?: number }).code === 11000);
+}
+
 export async function deleteRoom(code: string): Promise<void> {
+  if (usingMongo) {
+    const { rooms, presence } = await mongo();
+    await Promise.all([rooms.deleteOne({ _id: code }), presence.deleteMany({ code })]);
+    return;
+  }
   if (usingRedis) {
     await redis(["DEL", key(code)]);
     return;
@@ -173,12 +209,28 @@ export async function deleteRoom(code: string): Promise<void> {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Presence lives in its own short-lived keys rather than inside the room.
- * Writing a heartbeat into the room on every poll would mean a read-modify-write
- * once a second per player, and one of those could easily overwrite a guess that
- * landed in between.
+ * Presence lives outside the room document. Writing a heartbeat into the room
+ * on every poll would be a read-modify-write per second per player, and one of
+ * those could easily overwrite a guess that landed in between.
  */
 export async function markSeen(code: string, playerId: string): Promise<void> {
+  if (usingMongo) {
+    const { presence } = await mongo();
+    const now = new Date();
+    await presence.updateOne(
+      { _id: `${code}:${playerId}` },
+      {
+        $set: {
+          code,
+          playerId,
+          seenAt: now,
+          expiresAt: new Date(now.getTime() + 60 * 60 * 1000),
+        },
+      },
+      { upsert: true },
+    );
+    return;
+  }
   if (usingRedis) {
     await redis(["SET", seenKey(code, playerId), "1", "EX", PRESENCE_TTL_SECONDS]);
     return;
@@ -189,6 +241,18 @@ export async function markSeen(code: string, playerId: string): Promise<void> {
 export async function onlinePlayers(code: string, playerIds: string[]): Promise<Set<string>> {
   const online = new Set<string>();
   if (playerIds.length === 0) return online;
+
+  if (usingMongo) {
+    const { presence } = await mongo();
+    // Filter on seenAt rather than trusting the TTL sweep, which is far too
+    // coarse for a 15-second presence window.
+    const cutoff = new Date(Date.now() - PRESENCE_TTL_SECONDS * 1000);
+    const docs = await presence
+      .find({ code, playerId: { $in: playerIds }, seenAt: { $gt: cutoff } })
+      .toArray();
+    for (const doc of docs) online.add(doc.playerId);
+    return online;
+  }
 
   if (usingRedis) {
     const values = await redis(["MGET", ...playerIds.map((id) => seenKey(code, id))]);
@@ -209,29 +273,23 @@ export async function onlinePlayers(code: string, playerIds: string[]): Promise<
 }
 
 /* -------------------------------------------------------------------------- */
-/* Mutation with a lock                                                       */
+/* Mutation                                                                   */
 /* -------------------------------------------------------------------------- */
 
 const LOCK_TTL_SECONDS = 5;
 const LOCK_RETRIES = 25;
 const LOCK_RETRY_MS = 40;
+const CAS_RETRIES = 6;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Outcome of a mutation callback. `commit: false` means the room is left
- * untouched — used to reject a move while still reporting why.
- */
-export type Mutation<T> = { commit: boolean; value: T };
 
 /**
  * Read-modify-write a room without losing a concurrent update. The callback
  * edits the room in place and says whether to keep the edit.
  *
- * With Redis this takes a short `SET NX` lock first, because two players can
- * hit two different serverless instances at the same moment. In memory there is
- * nothing to lock: Node runs the whole callback on one thread with no await
- * against a remote store in between, so the read and the write are atomic.
+ * Mongo uses compare-and-set on `rev`: the update only matches if nobody else
+ * has written since we read, and a lost race simply retries against fresh
+ * state. No lock to acquire, and nothing to leak if an instance dies mid-write.
  *
  * Resolves to null only when the room doesn't exist.
  */
@@ -239,6 +297,31 @@ export async function mutateRoom<T>(
   code: string,
   mutate: (room: StoredRoom) => Mutation<T>,
 ): Promise<{ room: StoredRoom; value: T } | null> {
+  if (usingMongo) {
+    const { rooms } = await mongo();
+    for (let attempt = 0; attempt < CAS_RETRIES; attempt++) {
+      const room = await getRoom(code);
+      if (!room) return null;
+
+      const seenRev = room.rev;
+      const outcome = mutate(room);
+      if (!outcome.commit) return { room, value: outcome.value };
+
+      room.rev = seenRev + 1;
+      room.updatedAt = Date.now();
+      const res = await rooms.updateOne(
+        { _id: code, "room.rev": seenRev },
+        { $set: { room, expiresAt: expiryDate() } },
+      );
+      if (res.matchedCount === 1) return { room, value: outcome.value };
+
+      // Somebody wrote first. Re-read and replay the decision against the
+      // state that actually won.
+      await sleep(15 * (attempt + 1));
+    }
+    throw new Error("Room is busy — try again in a moment.");
+  }
+
   const run = async () => {
     const room = await getRoom(code);
     if (!room) return null;
@@ -266,8 +349,8 @@ export async function mutateRoom<T>(
   try {
     return await run();
   } finally {
-    // Only release the lock if it is still ours (it may have expired and been
-    // retaken); a plain DEL could otherwise free somebody else's lock.
+    // Only release if the lock is still ours; it may have expired and been
+    // retaken, and a plain DEL would free somebody else's.
     await redis([
       "EVAL",
       'if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) else return 0 end',
@@ -275,5 +358,21 @@ export async function mutateRoom<T>(
       lockKey(code),
       stamp,
     ]).catch(() => undefined);
+  }
+}
+
+/** Round-trip check used by /api/health. */
+export async function storeHealth(): Promise<{ ok: boolean; detail: string }> {
+  if (mongoConfigError) return { ok: false, detail: mongoConfigError };
+  if (!usingMongo) return { ok: true, detail: backend };
+  try {
+    const { db } = await mongo();
+    await db.command({ ping: 1 });
+    return { ok: true, detail: `mongo (${MONGODB_DB})` };
+  } catch (err) {
+    // Surface the driver's own message: it distinguishes bad credentials from
+    // an IP that the cluster's access list hasn't been told about, which is the
+    // most common first-deploy problem.
+    return { ok: false, detail: err instanceof Error ? err.message : "unreachable" };
   }
 }

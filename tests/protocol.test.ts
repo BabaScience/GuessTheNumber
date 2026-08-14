@@ -14,7 +14,6 @@ function room(over: Partial<PublicRoom> = {}): PublicRoom {
     round: 0,
     startSeat: 0,
     rev: 5,
-    restartedAt: null,
     phase: "duel",
     turnPlayerId: "a",
     winnerId: null,
@@ -31,27 +30,21 @@ describe("isNewerRoom", () => {
     assert.equal(isNewerRoom(room({ rev: 5 }), room({ rev: 6 })), true);
   });
 
-  it("accepts the same rev, since presence rides along unchanged revs", () => {
+  it("accepts an equal rev, since presence rides along on unchanged rooms", () => {
     assert.equal(isNewerRoom(room({ rev: 5 }), room({ rev: 5 })), true);
   });
 
   it("rejects a lower rev — a poll overtaking an action's reply", () => {
+    // The scenario: you submit a guess, and a poll issued moments earlier
+    // returns afterwards carrying the board as it was before your move.
     assert.equal(isNewerRoom(room({ rev: 5 }), room({ rev: 4 })), false);
   });
 
-  it("accepts a rebuilt room even though its rev counts from 1 again", () => {
-    // The regression this exists for: after the server forgets a room and a
-    // client reclaims it, the fresh room arrives at rev 1. Ordering on rev
-    // alone discards it, and the player sits looking at a board that no longer
-    // exists on the server.
-    const before = room({ rev: 9, restartedAt: null, phase: "duel" });
-    const rebuilt = room({ rev: 1, restartedAt: 1_700_000_000_000, phase: "lobby" });
-    assert.equal(isNewerRoom(before, rebuilt), true);
-  });
-
-  it("still orders by rev within one incarnation of a rebuilt room", () => {
-    const stamp = 1_700_000_000_000;
-    assert.equal(isNewerRoom(room({ rev: 4, restartedAt: stamp }), room({ rev: 3, restartedAt: stamp })), false);
-    assert.equal(isNewerRoom(room({ rev: 4, restartedAt: stamp }), room({ rev: 5, restartedAt: stamp })), true);
+  it("accepts a different room regardless of rev", () => {
+    // rev counts per room, so it means nothing across two of them. Leaving a
+    // long game for a fresh one must not be filtered out as stale.
+    const oldGame = room({ code: "AB23", rev: 40 });
+    const newGame = room({ code: "QQ77", rev: 1 });
+    assert.equal(isNewerRoom(oldGame, newGame), true);
   });
 });

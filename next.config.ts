@@ -3,6 +3,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // The MongoDB driver reaches for Node internals and optional native modules.
+  // Leaving it external keeps the bundler from trying to trace all of that.
+  serverExternalPackages: ["mongodb"],
   async headers() {
     return [
       {

@@ -31,8 +31,6 @@ export type PublicRoom = {
   round: number;
   startSeat: number;
   rev: number;
-  /** Set when the room was last rebuilt after the server forgot it. */
-  restartedAt: number | null;
   /** Convenience mirrors so the UI never has to recompute them to render. */
   phase: Phase;
   turnPlayerId: string | null;
@@ -42,14 +40,16 @@ export type PublicRoom = {
 /**
  * Should `next` replace the snapshot we're already showing?
  *
- * Normally `rev` orders snapshots, so a poll that overtakes an action's reply
- * can't roll the board backwards. But a room rebuilt after the server forgot it
- * starts counting from 1 again, so a lower `rev` there means "newer", not
- * "stale" — `restartedAt` tells the two incarnations apart.
+ * `rev` increases on every mutation and now comes from one shared store, so it
+ * totally orders snapshots: a poll that overtakes an action's reply can never
+ * roll the board backwards. Equal revs still pass, because presence rides along
+ * on an otherwise unchanged room.
  */
 export function isNewerRoom(current: PublicRoom | null, next: PublicRoom): boolean {
   if (!current) return true;
-  if (current.restartedAt !== next.restartedAt) return true;
+  // A different room in the same tab (rematch elsewhere, or a fresh join)
+  // shouldn't be filtered by a rev that means nothing across rooms.
+  if (current.code !== next.code) return true;
   return next.rev >= current.rev;
 }
 
@@ -71,25 +71,10 @@ export type GuessResponse = { room: PublicRoom; result: Guess };
 export type UnchangedResponse = { unchanged: true; rev: number; online: string[] };
 /**
  * Why a request failed, when the client needs to act on it rather than just
- * show it. `room-gone` and `seat-lost` both mean the server no longer knows
- * about us and a reclaim should be attempted; `bad-token` means it does know,
- * and we are not who we say we are.
+ * show it. `room-gone` means the room has genuinely expired or been closed —
+ * with a shared store that is a real answer, not an artefact of which server
+ * happened to reply.
  */
-export type ErrorCode = "room-gone" | "seat-lost" | "bad-token";
+export type ErrorCode = "room-gone" | "bad-token";
 
 export type ErrorResponse = { error: string; code?: ErrorCode };
-
-/**
- * Everything needed to rebuild a seat from the client after the server has
- * forgotten it. Deliberately excludes the secret and the guess history: those
- * are the round in progress, and a round that restarts in the open is better
- * than one a player could quietly rewrite.
- */
-export type ReclaimRequest = {
-  playerId: string;
-  token: string;
-  name: string;
-  wins: number;
-  levelId: string;
-  round: number;
-};

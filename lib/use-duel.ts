@@ -4,11 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import * as api from "./client";
 import { ApiError } from "./client";
-import { isNewerRoom, type Credentials, type PublicRoom, type ReclaimRequest } from "./protocol";
+import { isNewerRoom, type Credentials, type PublicRoom } from "./protocol";
 import type { GuessResult } from "./game";
 
-const RESTART_NOTICE =
-  "The server restarted and forgot this round — both of you need to pick a number again. Your score is intact.";
 
 export type Stage = "home" | "create" | "join" | "room";
 
@@ -42,73 +40,23 @@ export function useDuel() {
   const [restoring, setRestoring] = useState(true);
   /** Set briefly after your own guess resolves, to drive the feedback flash. */
   const [flash, setFlash] = useState<GuessResult | null>(null);
-  /** Explains a round that vanished under the players' feet. */
-  const [notice, setNotice] = useState("");
 
   // Refs so the polling loop always reads current values without restarting.
   const credentialsRef = useRef<Credentials | null>(null);
   const roomRef = useRef<PublicRoom | null>(null);
-  const seatRef = useRef<ReclaimRequest | null>(null);
   const failuresRef = useRef(0);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const myId = credentials?.playerId ?? null;
 
   const applyRoom = useCallback((next: PublicRoom) => {
-    const previous = roomRef.current;
-
     // Poll replies can arrive out of order behind an action's reply; never let
     // an older snapshot overwrite a newer one. Decided once, so the ref and the
     // rendered state cannot drift apart.
-    if (!isNewerRoom(previous, next)) return;
-
+    if (!isNewerRoom(roomRef.current, next)) return;
     setRoom(next);
     roomRef.current = next;
-
-    // A changed restart stamp means the room was rebuilt. Both players learn
-    // about it this way — the one who reclaimed and the one who just watched
-    // their board empty out.
-    if (previous && next.restartedAt && next.restartedAt !== previous.restartedAt) {
-      setNotice(RESTART_NOTICE);
-    }
-
-    // Keep the reclaim snapshot current, so recovery is possible even after a
-    // page refresh.
-    const creds = credentialsRef.current;
-    const me = creds ? next.players[creds.playerId] : null;
-    if (creds && me) {
-      const seat: ReclaimRequest = {
-        playerId: creds.playerId,
-        token: creds.token,
-        name: me.name,
-        wins: me.wins,
-        levelId: next.levelId,
-        round: next.round,
-      };
-      seatRef.current = seat;
-      api.saveSeat(creds.code, seat);
-    }
   }, []);
-
-  /**
-   * Put our seat back after the server forgot the room. Returns false when
-   * there is nothing left to rebuild from, in which case the caller should
-   * drop the player back to the home screen.
-   */
-  const recover = useCallback(async (): Promise<boolean> => {
-    const creds = credentialsRef.current;
-    if (!creds) return false;
-    const seat = seatRef.current ?? api.loadSeat(creds.code);
-    if (!seat) return false;
-    try {
-      const res = await api.reclaimSeat(creds.code, seat);
-      applyRoom(res.room);
-      setNotice(RESTART_NOTICE);
-      return true;
-    } catch {
-      return false;
-    }
-  }, [applyRoom]);
 
   const remember = useCallback((creds: Credentials) => {
     credentialsRef.current = creds;
@@ -119,7 +67,6 @@ export function useDuel() {
   const forget = useCallback(() => {
     credentialsRef.current = null;
     roomRef.current = null;
-    seatRef.current = null;
     setCredentials(null);
     setRoom(null);
     api.clearCredentials();
@@ -129,7 +76,6 @@ export function useDuel() {
     forget();
     setStage("home");
     setError("");
-    setNotice("");
     setOffline(false);
   }, [forget]);
 
@@ -150,26 +96,20 @@ export function useDuel() {
         applyRoom(res.room);
       }
     } catch (err) {
-      if (api.isRecoverable(err)) {
-        // The instance holding this room recycled. Rebuild the seat rather
-        // than dumping the players back to the home screen.
-        failuresRef.current = 0;
-        if (await recover()) return;
+      // A 404 or 401 from the shared store is the truth, not a routing
+      // accident: the room really has expired, or this seat isn't ours.
+      if (err instanceof ApiError && (err.status === 404 || err.status === 401)) {
         forget();
         setStage("home");
-        setError("That room is gone. Start a new one.");
-        return;
-      }
-      if (err instanceof ApiError && err.status === 401) {
-        forget();
-        setStage("home");
-        setError(err.message);
+        setError(
+          err.status === 404 ? "That room is gone. Start a new one." : err.message,
+        );
         return;
       }
       failuresRef.current += 1;
       if (failuresRef.current >= MAX_POLL_FAILURES) setOffline(true);
     }
-  }, [applyRoom, forget, recover]);
+  }, [applyRoom, forget]);
 
   useEffect(() => {
     if (stage !== "room" || !credentials) return;
@@ -246,26 +186,17 @@ export function useDuel() {
   /* ---- actions -------------------------------------------------------- */
 
   /** Wraps an action with the busy flag and turns thrown errors into a message. */
-  const run = useCallback(
-    async (action: () => Promise<void>) => {
-      setBusy(true);
-      setError("");
-      try {
-        await action();
-      } catch (err) {
-        if (api.isRecoverable(err)) {
-          // Don't replay the move: the rebuilt room has no round in progress,
-          // so retrying a guess would only produce a confusing second error.
-          // The notice explains what happened and the board shows the reset.
-          if (await recover()) return;
-        }
-        setError(err instanceof Error ? err.message : "Something went wrong.");
-      } finally {
-        setBusy(false);
-      }
-    },
-    [recover],
-  );
+  const run = useCallback(async (action: () => Promise<void>) => {
+    setBusy(true);
+    setError("");
+    try {
+      await action();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
+  }, []);
 
   const create = useCallback(
     (name: string, levelId: string) =>
@@ -341,8 +272,6 @@ export function useDuel() {
     offline,
     restoring,
     flash,
-    notice,
-    dismissNotice: useCallback(() => setNotice(""), []),
     create,
     join,
     lockSecret,
